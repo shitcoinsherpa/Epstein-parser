@@ -59,7 +59,7 @@ class MessagingHTMLGenerator:
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Epstein Email Archive - House Oversight</title>
     <link rel="stylesheet" href="assets/css/messaging.css">
 </head>
@@ -143,6 +143,7 @@ body {
     background: #f0f2f5;
     height: 100vh;
     overflow: hidden;
+    overflow-x: hidden;
 }
 
 .app-container {
@@ -346,6 +347,7 @@ body {
 .messages-container {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 2rem;
     background-image: repeating-linear-gradient(
         0deg,
@@ -919,9 +921,14 @@ function renderSenderList(senders) {
 function selectSender(sender) {
     currentSender = sender;
 
-    // Update UI
-    document.querySelectorAll('.sender-item').forEach(item => item.classList.remove('active'));
-    document.querySelector(`[data-sender="${sender}"]`)?.classList.add('active');
+    // Update UI - safely match by comparing dataset values instead of using querySelector with potentially unsafe string
+    document.querySelectorAll('.sender-item').forEach(item => {
+        item.classList.remove('active');
+        // Compare the actual dataset value (already unescaped by browser)
+        if (item.dataset.sender === sender) {
+            item.classList.add('active');
+        }
+    });
 
     // Load conversation
     loadConversation(sender);
@@ -1218,8 +1225,27 @@ function navigateToMatch(index) {
     targetBubble.style.boxShadow = '0 0 0 3px #ff5722, 0 4px 12px rgba(255, 87, 34, 0.4)';
     targetBubble.style.border = '2px solid #ff5722';
 
-    // Scroll to the match with smooth behavior
-    targetBubble.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Blur any active element to prevent auto-zoom on contenteditable fields
+    if (document.activeElement) {
+        document.activeElement.blur();
+    }
+
+    // Manually scroll the messages-container to the target bubble
+    // This prevents scrolling of parent containers (body, html)
+    const container = document.getElementById('messages-container');
+    if (container && targetBubble) {
+        const containerRect = container.getBoundingClientRect();
+        const bubbleRect = targetBubble.getBoundingClientRect();
+
+        // Calculate the scroll position to center the bubble in the container
+        const scrollTop = container.scrollTop + (bubbleRect.top - containerRect.top) - (containerRect.height / 2) + (bubbleRect.height / 2);
+
+        // Smooth scroll only within the messages container
+        container.scrollTo({
+            top: scrollTop,
+            behavior: 'smooth'
+        });
+    }
 
     updateSearchNavUI();
 }
