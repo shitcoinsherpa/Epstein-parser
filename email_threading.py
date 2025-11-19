@@ -24,16 +24,21 @@ class EmailThreader:
         deduplicated = []
 
         for email in emails:
-            # Create a signature for this email
-            timestamp = email.get("timestamp", 0)
-            from_addr = (email.get("from") or "").lower().strip()
-            to_addr = (email.get("to") or "").lower().strip()
-            body = (email.get("body") or "").strip()[:500]  # First 500 chars for comparison
+            # Create a signature for this email using the email's unique ID
+            # This is the most precise way to identify true duplicates
+            email_id = email.get("id", "")
 
-            # Create a key for deduplication
-            # Use timestamp rounded to 5-second intervals to catch slight timestamp differences
-            time_bucket = int(timestamp / 5) * 5 if timestamp else 0
-            key = (time_bucket, from_addr, to_addr, body)
+            # Fallback to content-based key if no ID
+            if not email_id:
+                timestamp = email.get("timestamp", 0)
+                from_addr = (email.get("from") or "").lower().strip()
+                to_addr = (email.get("to") or "").lower().strip()
+                subject = (email.get("subject") or "").lower().strip()
+                body = (email.get("body") or "").strip()
+                # Use full body and exact timestamp for precise matching
+                key = (timestamp, from_addr, to_addr, subject, body)
+            else:
+                key = email_id
 
             if key not in seen:
                 # First occurrence - initialize the duplicate_sources list

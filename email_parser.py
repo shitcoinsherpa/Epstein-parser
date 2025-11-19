@@ -12,8 +12,46 @@ class EmailParser:
     EPSTEIN_EMAILS = [
         "jeeitunes@gmail.com",
         "jeevacation@gmail.com",
+        "jeeproject@yahoo.com",         # Additional Epstein email
+        "deevacation@gmail.com",        # OCR typo: j→d
+        "j.epstein@lsnyc.net",          # Official email
+        "jepstein@lsnyc.net",           # Without dot variant
         "e:jeeitunes@gmail.com",
-        "e:jeevacation@gmail.com"
+        "e:jeevacation@gmail.com",
+        "e:jeeproject@yahoo.com"
+    ]
+
+    EPSTEIN_NAME_PATTERNS = [
+        "jeffrey epstein",
+        "jeffrey e.",
+        "jeffrey e",
+        "jeff epstein",
+        "epstein, jeffrey",
+        "jeevacation",
+        "jeeitunes",
+        "jeeproject",
+        "jee"                           # Short form used in some emails
+    ]
+
+    # Key associates/employees for tracking associate correspondence
+    ASSOCIATE_NAMES = [
+        "ghislaine maxwell",
+        "lesley groff",
+        "leslie groff",
+        "darren indyke",
+        "richard kahn",
+        "rich kahn",
+        "jean luc brunel",
+        "jean-luc brunel",
+        "sarah kellen",
+        "sarah kensington",
+        "nadia marcinkova",
+        "nadia",
+        "adriana ross",
+        "adriana mucinska",
+        "halidah sedgwick",
+        "alan dershowitz",
+        "alan m. dershowitz",
     ]
 
     # OCR typo corrections for known email addresses
@@ -57,6 +95,10 @@ class EmailParser:
         "al seckel": "Al Seckel",
         "al seckel 4111111111111.1111111111111111": "Al Seckel",
 
+        # Alan Dershowitz variations
+        "alan m. dershowil": "Alan Dershowitz",
+        "alan dershowitz": "Alan Dershowitz",
+
         # Anas Alrasheed variations
         "anasalrasheed": "Anas Alrasheed",
         "anasalrasheec": "Anas Alrasheed",
@@ -68,6 +110,7 @@ class EmailParser:
 
         # Lesley Groff variations
         "lesley groffl": "Lesley Groff",
+        "lesley groff i": "Lesley Groff",
         "tesley groff": "Lesley Groff",
         "lesley groff": "Lesley Groff",
 
@@ -87,6 +130,7 @@ class EmailParser:
         # Kathy Ruemmler variations
         "kathy ruemmler f": "Kathy Ruemmler",
         "kathy ruemmler i": "Kathy Ruemmler",
+        "kathy ruemmlerl": "Kathy Ruemmler",
         "kathy ruemmler": "Kathy Ruemmler",
 
         # LHS variations
@@ -98,12 +142,18 @@ class EmailParser:
         "larry summers": "Larry Summers",
 
         # Landon Thomas Jr variations
+        "landon'": "Landon Thomas Jr.",
+        "landon": "Landon Thomas Jr.",
         "landon thomas": "Landon Thomas Jr.",
         "landon thomas jr": "Landon Thomas Jr.",
         "landon thomas jr.": "Landon Thomas Jr.",
         "thomas jr., landon": "Landon Thomas Jr.",
+        "thomas jr": "Landon Thomas Jr.",
 
         # Steve/Stephen Bannon variations
+        "steve bannon i": "Steve Bannon",
+        "steve bannon'il": "Steve Bannon",
+        "steve bannon`": "Steve Bannon",
         "steve bannon": "Steve Bannon",
         "stephen bannon": "Steve Bannon",
 
@@ -163,6 +213,7 @@ class EmailParser:
         "lawrence krauss": "Lawrence Krauss",
 
         # Leon Black variations
+        "leon blac": "Leon Black",
         "leon black": "Leon Black",
 
         # Linda Stone variations
@@ -206,6 +257,8 @@ class EmailParser:
         "paul prosperi": "Paul Prosperi",
 
         # Peter Mandelson variations
+        "peter mandelsor": "Peter Mandelson",
+        "peter mandelson bt": "Peter Mandelson",
         "peter mandelson.": "Peter Mandelson",
         "peter mandelson": "Peter Mandelson",
 
@@ -247,7 +300,12 @@ class EmailParser:
         "stephen hanson": "Stephen Hanson",
         "steve hanson": "Stephen Hanson",
 
+        # Steven Pfeiffer variations
+        "steven pfeiffer a=11": "Steven Pfeiffer",
+        "steven pfeiffer": "Steven Pfeiffer",
+
         # Sultan Bin Sulayem variations
+        "sultan bin sulayerr": "Sultan Bin Sulayem",
         "sultan bin sulayem": "Sultan Bin Sulayem",
 
         # Valeria Chomsky variations
@@ -512,6 +570,9 @@ class EmailParser:
             from_email = self.canonicalize_sender(from_addr)
             to_email = self.canonicalize_sender(to_addr)
 
+            # Extract recipient list (handles semicolon-separated, quotes, etc.)
+            to_list = self.extract_recipients(to_addr) if to_addr else []
+
             # Skip if invalid
             if not from_email or len(from_email) < 2:
                 continue
@@ -527,7 +588,7 @@ class EmailParser:
             embedded_emails.append({
                 "from": from_email,
                 "to": to_email,
-                "to_list": [to_email] if to_email else [],
+                "to_list": to_list,
                 "date": parsed_date["iso"] if parsed_date else date_str,
                 "timestamp": parsed_date["timestamp"] if parsed_date else 0,
                 "subject": subject,
@@ -720,8 +781,9 @@ class EmailParser:
             # Parse subject metadata
             subject_meta = self.parse_subject_metadata(subject_match)
 
-            # Generate unique ID
-            email_id = self.generate_id(from_email, to_email, sent_match, subject_match or "")
+            # Generate unique ID with source file and position
+            email_id = self.generate_id(from_email, to_email, sent_match, subject_match or "",
+                                       os.path.basename(file_path), 0)
 
             self.stats["traditional_format"] += 1
 
@@ -750,18 +812,44 @@ class EmailParser:
                 "disclaimer": disclaimer,
                 "importance": importance_match,
                 "source_file": os.path.basename(file_path),
-                "is_epstein_sender": self.is_epstein_email(from_email),
-                "is_epstein_recipient": self.is_epstein_email(to_email) or any(self.is_epstein_email(r) for r in all_recipients),
+                "is_epstein_sender": self.is_epstein_email(from_email) or self.is_epstein_name(from_name),
+                "is_epstein_recipient": (
+                    self.is_epstein_email(to_email) or
+                    self.is_epstein_name(to_name) or
+                    any(self.is_epstein_email(r) or self.is_epstein_name(r) for r in all_recipients) or
+                    any(self.is_epstein_email(cc) or self.is_epstein_name(cc) for cc in cc_list) or
+                    # Parse the raw to field directly (handles semicolon-separated lists with quotes)
+                    any(self.is_epstein_email(r) or self.is_epstein_name(r) for r in self.parse_recipients(to_match or ""))
+                ),
+                "is_associate_sender": self.is_associate_name(from_email) or self.is_associate_name(from_name),
+                "is_associate_recipient": (
+                    self.is_associate_name(to_email) or
+                    self.is_associate_name(to_name) or
+                    any(self.is_associate_name(r) for r in all_recipients) or
+                    any(self.is_associate_name(cc) for cc in cc_list)
+                ),
+                "associate_names": list(set(
+                    self.get_associates_in_name(from_email) +
+                    self.get_associates_in_name(from_name) +
+                    self.get_associates_in_name(to_email) +
+                    self.get_associates_in_name(to_name) +
+                    [assoc for r in all_recipients for assoc in self.get_associates_in_name(r)] +
+                    [assoc for cc in cc_list for assoc in self.get_associates_in_name(cc)]
+                )),
                 "raw_date": sent_match,
                 "is_embedded": False
             }
+
+            # Mark email as irrelevant if it matches spam/fragment patterns
+            main_email["is_irrelevant"] = self.is_irrelevant_email(main_email)
 
             # Return list: [main_email] + embedded_emails
             # If there are embedded emails, return all of them
             if embedded_emails:
                 # Update embedded emails with proper metadata
-                for emb in embedded_emails:
-                    emb["id"] = self.generate_id(emb["from"], emb["to"], emb.get("raw_date", ""), emb.get("subject", ""))
+                for idx, emb in enumerate(embedded_emails, start=1):
+                    emb["id"] = self.generate_id(emb["from"], emb["to"], emb.get("raw_date", ""), emb.get("subject", ""),
+                                                 os.path.basename(file_path), idx)
                     emb["format"] = "traditional"
                     emb["from_name"] = None
                     emb["to_name"] = None
@@ -770,8 +858,31 @@ class EmailParser:
                     emb["reply_depth"] = 0
                     emb["is_forward"] = False
                     emb["importance"] = None
-                    emb["is_epstein_sender"] = self.is_epstein_email(emb["from"])
-                    emb["is_epstein_recipient"] = self.is_epstein_email(emb.get("to"))
+                    emb["is_epstein_sender"] = self.is_epstein_email(emb["from"]) or self.is_epstein_name(emb.get("from_name", ""))
+                    emb["is_epstein_recipient"] = (
+                        self.is_epstein_email(emb.get("to")) or
+                        self.is_epstein_name(emb.get("to_name", "")) or
+                        any(self.is_epstein_email(cc) or self.is_epstein_name(cc) for cc in emb.get("cc_list", [])) or
+                        # Parse the raw to field directly for embedded emails too
+                        any(self.is_epstein_email(r) or self.is_epstein_name(r) for r in self.parse_recipients(emb.get("to", "")))
+                    )
+                    emb["is_associate_sender"] = self.is_associate_name(emb["from"]) or self.is_associate_name(emb.get("from_name", ""))
+                    emb["is_associate_recipient"] = (
+                        self.is_associate_name(emb.get("to")) or
+                        self.is_associate_name(emb.get("to_name", "")) or
+                        any(self.is_associate_name(r) for r in emb.get("to_list", [])) or
+                        any(self.is_associate_name(cc) for cc in emb.get("cc_list", []))
+                    )
+                    emb["associate_names"] = list(set(
+                        self.get_associates_in_name(emb["from"]) +
+                        self.get_associates_in_name(emb.get("from_name", "")) +
+                        self.get_associates_in_name(emb.get("to", "")) +
+                        self.get_associates_in_name(emb.get("to_name", "")) +
+                        [assoc for r in emb.get("to_list", []) for assoc in self.get_associates_in_name(r)] +
+                        [assoc for cc in emb.get("cc_list", []) for assoc in self.get_associates_in_name(cc)]
+                    ))
+                    # Mark embedded email as irrelevant if it matches spam/fragment patterns
+                    emb["is_irrelevant"] = self.is_irrelevant_email(emb)
 
                 return [main_email] + embedded_emails
             else:
@@ -853,7 +964,8 @@ class EmailParser:
             processed_msg = self.strip_quoted_content(processed_msg)
 
             emails.append({
-                "id": self.generate_id(sender_email, recipient, timestamp, message[:50]),
+                "id": self.generate_id(sender_email, recipient, timestamp, message[:50],
+                                      os.path.basename(file_path), idx),
                 "format": "chat",
                 "from": sender_email,
                 "from_name": sender_name,
@@ -925,7 +1037,7 @@ class EmailParser:
             # Parse each email block and collect all emails
             all_emails = []
 
-            for block in email_blocks:
+            for block_idx, block in enumerate(email_blocks):
                 # Extract fields from this block
                 guid_match = re.search(r'GUID:\s*([A-F0-9-]+)', block)
                 message_match = re.search(r'Message:\s*(.+?)(?=\nSender:|$)', block, re.DOTALL)
@@ -972,8 +1084,9 @@ class EmailParser:
                 # Parse subject metadata (even though no subject in message format)
                 subject_meta = self.parse_subject_metadata(None)
 
-                # Generate unique ID
-                email_id = self.generate_id(sender_email, recipient, time_str, message[:50])
+                # Generate unique ID with source file and block position
+                email_id = self.generate_id(sender_email, recipient, time_str, message[:50],
+                                           os.path.basename(file_path), block_idx)
 
                 # Process body
                 processed_msg = self.fix_ocr_urls(message)
@@ -1016,6 +1129,35 @@ class EmailParser:
             print(f"Error parsing message format: {e}")
             return None
 
+    def clean_ocr_artifacts(self, name: str) -> str:
+        """Remove common OCR artifacts from names
+
+        Targets specific patterns found in analysis:
+        - [mailto and [mailto: patterns
+        - Malformed email addresses in brackets
+        - Trailing [ ii, [ il, etc. OCR garbage
+        - Spaces in email addresses (e.g., "gma il.com")
+        """
+        if not name:
+            return ""
+
+        # Remove [mailto: and [mailto patterns
+        name = re.sub(r'\s*\[mailto:?[^\]]*$', '', name)
+        name = re.sub(r'\s*\[mailto:?[^\]]*\]', '', name)
+
+        # Remove malformed email addresses in brackets (with spaces)
+        # e.g., "[jeevacation@gma il.com"
+        name = re.sub(r'\[[\w\-\.]+@[\w\s\-\.]+\]?', '', name)
+
+        # Remove trailing OCR garbage like "[ ii", "[ il", "[ I", etc.
+        name = re.sub(r'\s*\[\s*[il1I]+\s*$', '', name)
+
+        # Remove standalone brackets
+        name = re.sub(r'\s*\[\s*$', '', name)
+        name = re.sub(r'^\s*\]', '', name)
+
+        return name.strip()
+
     def normalize_sender_field(self, field: str) -> str:
         """Clean sender field of all OCR artifacts and formatting issues"""
         if not field:
@@ -1027,7 +1169,10 @@ class EmailParser:
            (field.startswith("'") and field.endswith("'")):
             field = field[1:-1].strip()
 
-        # Remove [mailto: patterns
+        # Apply dedicated OCR artifact cleaning
+        field = self.clean_ocr_artifacts(field)
+
+        # Remove [mailto: patterns (kept for legacy compatibility)
         field = re.sub(r'\s*\[mailto:[^\]]*\]', '', field)
 
         # Remove everything after < or ‹ or other bracket chars (email artifacts)
@@ -1125,6 +1270,14 @@ class EmailParser:
                 name = re.sub(r'^[\s_\-\.;:,]+', '', name)  # Leading punctuation
                 name = re.sub(r'\s+\d{5,}[\.\-=]*$', '', name)  # Trailing OCR number sequences (5+ digits, possibly with punctuation)
                 name = re.sub(r'\s+[\d=\-\.\|]+$', '', name)  # Remove patterns like "111=11"
+
+                # Remove trailing single characters (OCR artifacts like " I", " l", etc.)
+                name = re.sub(r'\s+[IilL1]$', '', name)
+
+                # Remove trailing special character combinations (OCR artifacts like "'IL", "`", "BT", etc.)
+                name = re.sub(r"['`]+[IiLl]*$", '', name)
+                name = re.sub(r'\s+(BT|Bt|bt)$', '', name, flags=re.IGNORECASE)
+
                 name = re.sub(r'[\.,]$', '', name)  # Remove trailing period or comma
                 name = name.strip()
 
@@ -1392,12 +1545,78 @@ class EmailParser:
             # Gmail-style quote formats
             "%a, %b %d, %Y at %I:%M %p",  # Mon, Jun 3, 2019 at 9:12 AM
             "%a, %b %d, %Y at %I:%M:%S %p",  # Mon, Jun 3, 2019 at 9:12:00 AM
+            # European date formats (DD/MM/YYYY)
+            "%d/%m/%Y %I:%M %p",     # 15/10/2014 4:46 PM
+            "%d/%m/%Y %I:%M:%S %p",  # 15/10/2014 4:46:30 PM
+            # European with 24-hour time
+            "%d/%m/%Y %H:%M",        # 16/01/2015 05:16
+            "%d/%m/%Y %H:%M:%S",     # 16/01/2015 05:16:00
+            # Weekday with "at" patterns
+            "%A, %B %d, %Y at %I:%M %p",     # Monday, November 16, 2009 at 7:48 PM
+            "%A, %B %d, %Y at %I:%M:%S %p",  # Monday, November 16, 2009 at 7:48:30 PM
+            # Month name with "at" and optional timezone
+            "%B %d, %Y at %I:%M:%S %p",      # December 15, 2016 at 10:59:39 AM (timezone stripped below)
+            "%B %d, %Y at %I:%M %p",         # December 15, 2016 at 10:59 AM
+            # RFC-style dates with numeric timezone offset
+            "%a, %d %b %Y %H:%M:%S %z",      # Sun, 22 Jul 2018 22:01:54 +0200
+            "%a, %d %b %Y %H:%M:%S",         # Fri, 4 Mar 2011 11:14:35 (no offset)
+            "%a, %b %d, %Y %I:%M %p",        # Mon, Aug 20, 2012 2:32 pm
+            # Weekday, Month day YEAR (NO comma before year - common pattern!)
+            "%A, %B %d %Y %I:%M %p",         # Monday, August 26 2013 02:46 PM
+            "%A, %B %d %Y %I:%M:%S %p",      # Wednesday, April 17 2019 11:43:15 AM
+            # Short month formats
+            "%b %d, %Y %I:%M %p",            # Jan 30, 2015 12:25 PM
+            "%b %d, %Y, %I:%M:%S %p",        # May 22, 2013, 8:54:07 PM
+            # Dates with timezone at end (before stripping)
+            "%m/%d/%Y %I:%M %p",             # 03/07/2011 02:04 PM (EST stripped by regex)
+            # Day Month Year formats
+            "%d %B %Y at %H: %M",            # 2 January 2015 at 20: 38 (note space in time)
+            # Weekday without comma before date
+            "%a %m/%d/%Y %I:%M %p",          # Mon 3/7/2011 12:18 PM
+            "%a %m/%d/%Y %I:%M:%S %p",       # Mon 3/7/2011 12:18:00 PM
+            "%A, %B %d %Y %I:%M %p",         # Friday, March 4 2011 04:40 PM (no comma before year)
+            "%A, %B %d %Y %I:%M:%S %p",      # Friday, March 4 2011 04:40:00 PM
+            # Comma after year formats
+            "%B %d, %Y, %I:%M:%S %p",        # January 30, 2015, 12:00:34 PM (comma before time)
+            "%B %d, %Y %I:%M:%S %p",         # April 6, 2011 10:28:36 AM (no comma, timezone stripped)
+            # Day-first with 24-hour
+            "%A, %d %B %Y %H:%M",            # Sunday, 15 January 2017 05:51
+            "%A, %d %B %Y %H:%M:%S",         # Sunday, 15 January 2017 05:51:00
+            # RFC with timezone in parens (stripped by regex)
+            "%a, %d %b %Y %H:%M:%S %z",      # Fri, 1 Jul 2016 07:01:36 -0400 (EDT)
+            # Short month with comma after year
+            "%A, %b %d, %Y, %I:%M %p",       # Tuesday, Jan 24, 2017, 10:04 AM
+            # Day Month Year 24-hour (no weekday)
+            "%d %B %Y %H:%M",                # 24 July 2018 21:54
+            "%d %B, %Y %H:%M %p",            # 18 January, 2013 2:40 AM
+            # Period instead of comma after day
+            "%A, %B %d. %Y %H:%M",           # Thursday, January 28. 2010 11:24
+            # Short month 24-hour
+            "%b %d, %Y %H:%M:%S",            # Oct 12, 2009 17:44:42
+            # Month day year 12-hour without weekday
+            "%B %d, %Y %I:%M %p",            # November 16, 2017 3:26 PM
+            # Short weekday with full date and parens
+            "%a %m/%d/%Y %I:%M:%S %p",       # Fri 10/7/2016 10:30:45 PM (UTC stripped)
+            # Date-only formats
+            "%B %d, %Y",             # January 23, 2009
+            "%B %d, %Y",             # November 14, 2015
+            "%m/%d/%Y",              # 06/20/2007
+            "%m/%d/%y",              # 06/20/07
+            "%d/%m/%Y",              # 07/24/2006 (European date-only)
         ]
 
         for fmt in formats:
             try:
                 # Remove timestamp in parentheses if present
                 clean_date = re.sub(r'\s*\(\d+\)\s*$', '', date_str)
+                # Remove timezone suffixes: (GMT+XX:XX), EST, PST, etc.
+                clean_date = re.sub(r'\s*\(GMT[+-]\d{2}:\d{2}\)\s*', '', clean_date)
+                # Remove GMT+N or GMT-N (single digit)
+                clean_date = re.sub(r'\s+GMT[+-]\d+\s*', ' ', clean_date)
+                # Remove timezone in parens like (UTC), (EDT), etc.
+                clean_date = re.sub(r'\s*\((EST|PST|CST|MST|EDT|PDT|CDT|MDT|UTC|GMT|GDT|BST|IST)\)\s*', ' ', clean_date)
+                # Remove timezone abbreviations (expanded list, no $ anchor to catch mid-string)
+                clean_date = re.sub(r'\s+(EST|PST|CST|MST|EDT|PDT|CDT|MDT|UTC|GMT|GDT|BST|IST)\s*', ' ', clean_date)
                 dt = datetime.strptime(clean_date.strip(), fmt)
                 return {
                     "iso": dt.isoformat(),
@@ -1517,9 +1736,82 @@ class EmailParser:
         email_lower = email.lower().strip()
         return any(epstein_email.lower() in email_lower for epstein_email in self.EPSTEIN_EMAILS)
 
-    def generate_id(self, from_email: str, to_email: str, date: str, subject: str) -> str:
-        """Generate unique ID for email"""
-        content = f"{from_email}|{to_email}|{date}|{subject}"
+    def is_epstein_name(self, name: str) -> bool:
+        """Check if name matches Epstein patterns"""
+        if not name:
+            return False
+        name_lower = name.lower().strip()
+        return any(pattern in name_lower for pattern in self.EPSTEIN_NAME_PATTERNS)
+
+    def is_associate_name(self, name: str) -> bool:
+        """Check if name matches known associate patterns"""
+        if not name:
+            return False
+        name_lower = name.lower().strip()
+        return any(assoc in name_lower for assoc in self.ASSOCIATE_NAMES)
+
+    def get_associates_in_name(self, name: str) -> List[str]:
+        """Return list of associate names found in the given name"""
+        if not name:
+            return []
+        name_lower = name.lower().strip()
+        found = []
+        for assoc in self.ASSOCIATE_NAMES:
+            if assoc in name_lower:
+                # Return canonical form (title case)
+                found.append(assoc.title())
+        return found
+
+    def is_irrelevant_email(self, email_dict: dict) -> bool:
+        """
+        Determine if an email is irrelevant (ONLY obvious spam - be conservative)
+        IMPORTANT: Every email could be pivotal to the case, so only flag clear spam
+        Criteria:
+        1. Known spam senders (travel marketing, newsletters)
+        2. Clear spam patterns (unsubscribe, marketing language)
+        NOTE: Do NOT exclude fragments - they may provide important context
+        """
+        subject = (email_dict.get("subject") or "").lower()
+        body = (email_dict.get("body") or "").lower()
+        from_field = (email_dict.get("from") or "").lower()
+
+        combined = f"{subject} {body} {from_field}"
+
+        # Check for known spam senders only
+        spam_senders = [
+            'asmallworld@',  # Travel marketing spam
+        ]
+
+        for sender in spam_senders:
+            if sender in from_field:
+                return True
+
+        # Only flag clear unsubscribe spam
+        if 'unsubscribe' in combined and ('newsletter' in combined or 'mailing list' in combined):
+            return True
+
+        return False
+
+    def parse_recipients(self, recipient_str: str) -> List[str]:
+        """
+        Parse semicolon or comma-separated recipient list
+        Strips quotes and whitespace
+        """
+        if not recipient_str:
+            return []
+
+        # Strip quotes (both single and double)
+        cleaned = recipient_str.replace("'", "").replace('"', '')
+
+        # Split on semicolons and commas
+        recipients = re.split(r'[;,]', cleaned)
+
+        # Strip whitespace and filter empty strings
+        return [r.strip() for r in recipients if r.strip()]
+
+    def generate_id(self, from_email: str, to_email: str, date: str, subject: str, source_file: str = "", position: int = 0) -> str:
+        """Generate unique ID for email using content + source metadata"""
+        content = f"{from_email}|{to_email}|{date}|{subject}|{source_file}|{position}"
         return hashlib.md5(content.encode()).hexdigest()[:16]
 
     def canonicalize_sender(self, sender: str) -> str:
@@ -1535,6 +1827,14 @@ class EmailParser:
         # Strip trailing OCR number garbage (5+ digits, possibly with punctuation)
         sender = re.sub(r'\s+\d{5,}[\.\-=]*$', '', sender)
         sender = re.sub(r'\s+[\d=\-\.\|]+$', '', sender)  # Remove patterns like "111=11"
+        sender = sender.strip()
+
+        # Remove trailing single characters (OCR artifacts like " I", " l", etc.)
+        sender = re.sub(r'\s+[IilL1]$', '', sender)
+
+        # Remove trailing special character combinations (OCR artifacts like "'IL", "`", "BT", etc.)
+        sender = re.sub(r"['`]+[IiLl]*$", '', sender)
+        sender = re.sub(r'\s+(BT|Bt|bt)$', '', sender, flags=re.IGNORECASE)
         sender = sender.strip()
 
         # Remove trailing single period or comma
@@ -1890,8 +2190,30 @@ class EmailParser:
 
             # Update Epstein flags after canonicalization (check both to_list and cc_list)
             all_recipients = email.get("to_list", []) + email.get("cc_list", [])
-            email["is_epstein_sender"] = self.is_epstein_email(email["from"])
-            email["is_epstein_recipient"] = self.is_epstein_email(email["to"]) or any(self.is_epstein_email(r) for r in all_recipients)
+            email["is_epstein_sender"] = self.is_epstein_email(email["from"]) or self.is_epstein_name(email.get("from", ""))
+            email["is_epstein_recipient"] = (
+                self.is_epstein_email(email["to"]) or
+                self.is_epstein_name(email.get("to", "")) or
+                any(self.is_epstein_email(r) or self.is_epstein_name(r) for r in all_recipients)
+            )
+
+            # Update associate flags after canonicalization
+            email["is_associate_sender"] = self.is_associate_name(email["from"]) or self.is_associate_name(email.get("from", ""))
+            email["is_associate_recipient"] = (
+                self.is_associate_name(email["to"]) or
+                self.is_associate_name(email.get("to", "")) or
+                any(self.is_associate_name(r) for r in all_recipients)
+            )
+            email["associate_names"] = list(set(
+                self.get_associates_in_name(email["from"]) +
+                self.get_associates_in_name(email.get("from", "")) +
+                self.get_associates_in_name(email["to"]) +
+                self.get_associates_in_name(email.get("to", "")) +
+                [assoc for r in all_recipients for assoc in self.get_associates_in_name(r)]
+            ))
+
+            # Recalculate is_irrelevant flag
+            email["is_irrelevant"] = self.is_irrelevant_email(email)
 
             # IMPORTANT: If Epstein is sending to himself, mark as "Unknown Recipient"
             # (Epstein shouldn't appear as his own recipient)

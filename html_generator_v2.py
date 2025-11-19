@@ -3,6 +3,19 @@ import os
 from datetime import datetime
 from typing import Dict, List
 
+# Email address to proper name mapping
+# Maps commonly used email addresses to display names for better UI presentation
+EMAIL_TO_NAME_MAP = {
+    # Epstein's email addresses
+    "jeeitunes@gmail.com": "Jeffrey Epstein",
+    "jeevacation@gmail.com": "Jeffrey Epstein",
+    "deevacation@gmail.com": "Jeffrey Epstein",  # OCR typo variant
+    "j.epstein@lsnyc.net": "Jeffrey Epstein",
+    "jepstein@lsnyc.net": "Jeffrey Epstein",
+    "e:jeeitunes@gmail.com": "Jeffrey Epstein",
+    "e:jeevacation@gmail.com": "Jeffrey Epstein",
+}
+
 class MessagingHTMLGenerator:
     """Generate iMessage/WhatsApp style HTML viewer for emails"""
 
@@ -10,6 +23,22 @@ class MessagingHTMLGenerator:
         self.emails = emails
         self.threads = threads
         self.stats = stats
+
+    def apply_name_mapping(self, from_field: str) -> str:
+        """
+        Apply email-to-name mapping for better display
+
+        If from_field is an email address in EMAIL_TO_NAME_MAP, return the proper name.
+        Otherwise, return the original value.
+        """
+        if not from_field:
+            return from_field
+
+        # Check if it's a mapped email address
+        if from_field.lower() in EMAIL_TO_NAME_MAP:
+            return EMAIL_TO_NAME_MAP[from_field.lower()]
+
+        return from_field
 
     def generate(self, output_dir: str):
         """Generate all HTML files and assets"""
@@ -530,10 +559,20 @@ body {
     def generate_javascript(self, output_dir: str):
         """Generate JavaScript with embedded data (works offline)"""
 
+        # Apply name mapping to email "from" fields for better display
+        emails_with_mapped_names = []
+        for email in self.emails:
+            email_copy = email.copy()
+            # Apply name mapping to "from" field
+            email_copy["from"] = self.apply_name_mapping(email.get("from", ""))
+            # Also handle "to" field if it's an email address
+            email_copy["to"] = self.apply_name_mapping(email.get("to", ""))
+            emails_with_mapped_names.append(email_copy)
+
         # Embed data directly in data.js for offline compatibility
         # Note: For production with web server, could switch to lazy loading
         data_js = f'''// Email data (embedded for offline use)
-const emailData = {json.dumps(self.emails, ensure_ascii=False)};
+const emailData = {json.dumps(emails_with_mapped_names, ensure_ascii=False)};
 const statistics = {json.dumps(self.stats, ensure_ascii=False)};
 '''
 
@@ -573,14 +612,60 @@ function attachEventListeners() {
         });
     });
 
-    // Global search
+    // Event delegation for sender items (supports both click and touch)
+    const senderList = document.getElementById('sender-list');
+    senderList.addEventListener('click', function(e) {
+        const senderItem = e.target.closest('.sender-item');
+        if (senderItem) {
+            const senderName = senderItem.dataset.sender;
+            if (senderName) {
+                selectSender(senderName);
+            }
+        }
+    });
+
+    // Touch support for mobile
+    senderList.addEventListener('touchend', function(e) {
+        const senderItem = e.target.closest('.sender-item');
+        if (senderItem) {
+            e.preventDefault(); // Prevent double-firing with click
+            const senderName = senderItem.dataset.sender;
+            if (senderName) {
+                selectSender(senderName);
+            }
+        }
+    });
+
+    // Global search - input event for live search
     document.getElementById('global-search').addEventListener('input', debounce(function(e) {
         globalSearch(e.target.value);
     }, 300));
 
+    // Global search - Enter key for immediate search
+    document.getElementById('global-search').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+            e.preventDefault();
+            globalSearch(this.value);
+        }
+    });
+
     // Export buttons
     document.getElementById('export-conversation').addEventListener('click', exportCurrentConversation);
     document.getElementById('export-all').addEventListener('click', exportAll);
+
+    // Keyboard shortcuts for search navigation
+    document.addEventListener('keydown', function(e) {
+        // Ctrl+Down or Cmd+Down = Next match
+        if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowDown') {
+            e.preventDefault();
+            nextSearchMatch();
+        }
+        // Ctrl+Up or Cmd+Up = Previous match
+        if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowUp') {
+            e.preventDefault();
+            prevSearchMatch();
+        }
+    });
 }
 
 function applyFilter(mode) {
@@ -596,7 +681,18 @@ function applyFilter(mode) {
     }
     // Rebuild search index when filter changes
     searchIndex = null;
-    populateSenderList();
+
+    // Check if there's an active search and re-apply it to the new filter
+    const searchBox = document.getElementById('global-search');
+    const currentSearch = searchBox ? searchBox.value.trim() : '';
+
+    if (currentSearch) {
+        // Re-run search with current query on the newly filtered dataset
+        globalSearch(currentSearch);
+    } else {
+        // No active search, show normal sender list
+        populateSenderList();
+    }
 }
 
 function globalSearch(query) {
@@ -605,6 +701,9 @@ function globalSearch(query) {
     if (!query) {
         // If search is cleared, restore normal view and clear highlighting
         currentSearchTerm = '';
+        searchMatches = [];
+        currentMatchIndex = -1;
+        updateSearchNavUI();
         populateSenderList();
         return;
     }
@@ -719,7 +818,7 @@ function globalSearch(query) {
     list.innerHTML = '<div style="padding: 0.5rem 1rem; background: #e3f2fd; font-size: 0.85rem; color: #1976d2; border-bottom: 1px solid #e0e0e0;">' +
         '🔍 ' + matchingEmails.length + ' results in ' + results.length + ' conversations</div>' +
         results.map(sender => `
-            <div class="sender-item" data-sender="${escapeHtml(sender.name)}" onclick="selectSender('${escapeHtml(sender.name)}')">
+            <div class="sender-item" data-sender="${escapeHtml(sender.name)}">
                 <div class="sender-name">${escapeHtml(sender.name)}</div>
                 <div class="sender-preview">${escapeHtml(sender.preview)}</div>
                 <div class="sender-meta">
@@ -806,7 +905,7 @@ function populateSenderList() {
 function renderSenderList(senders) {
     const list = document.getElementById('sender-list');
     list.innerHTML = senders.map(sender => `
-        <div class="sender-item" data-sender="${escapeHtml(sender.name)}" onclick="selectSender('${escapeHtml(sender.name)}')">
+        <div class="sender-item" data-sender="${escapeHtml(sender.name)}">
             <div class="sender-name">${escapeHtml(sender.name)}</div>
             <div class="sender-preview">${escapeHtml(sender.preview)}</div>
             <div class="sender-meta">
@@ -900,6 +999,11 @@ function loadConversation(sender) {
             <h2>${escapeHtml(sender)} <span style="color: #999; font-size: 0.9rem;">(${emails.length} messages in ${deduplicatedThreads.length} ${deduplicatedThreads.length === 1 ? 'thread' : 'threads'})</span></h2>
         </div>
         <div class="header-controls">
+            <div id="search-nav-container" style="display: none; align-items: center; gap: 0.5rem; margin-right: 1rem;">
+                <button onclick="prevSearchMatch()" style="background: #667eea; color: white; border: none; border-radius: 4px; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.9rem; font-weight: 600;">↑ Prev</button>
+                <span id="search-match-counter" style="font-size: 0.9rem; font-weight: 600; color: #667eea; min-width: 4rem; text-align: center;">0 / 0</span>
+                <button onclick="nextSearchMatch()" style="background: #667eea; color: white; border: none; border-radius: 4px; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.9rem; font-weight: 600;">↓ Next</button>
+            </div>
             <span class="metadata-info">${dateRange}</span>
         </div>
     `;
@@ -965,7 +1069,7 @@ function loadConversation(sender) {
                             ${replyDepth > 0 ? `<span class="bubble-badge" title="Reply depth">↩️ ${replyDepth}</span>` : ''}
                             ${email.is_forward ? `<span class="bubble-badge" style="background: #ff9800; color: white;">FWD</span>` : ''}
                         </div>
-                        ${email.subject_clean ? `<div class="message-subject">📧 ${currentSearchTerm ? highlightText(email.subject_clean, currentSearchTerm) : escapeHtml(email.subject_clean)}</div>` : email.subject ? `<div class="message-subject">📧 ${currentSearchTerm ? highlightText(email.subject, currentSearchTerm) : escapeHtml(email.subject)}</div>` : ''}
+                        ${email.subject_clean ? `<div class="message-subject">📧 ${currentSearchTerm ? highlightText(email.subject_clean, currentSearchTerm) : escapeHtml(email.subject_clean)}</div>` : email.subject ? `<div class="message-subject">📧 ${currentSearchTerm ? highlightText(email.subject, currentSearchTerm) : escapeHtml(email.subject)}</div>` : `<div class="message-subject" style="font-style: italic; opacity: 0.6;">📧 (No Subject)</div>`}
                         ${email.body ? `<div class="bubble-text">${currentSearchTerm ? highlightText(email.body, currentSearchTerm) : escapeHtml(email.body)}</div>` : (!email.disclaimer ? `<div class="bubble-text" style="font-style: italic; opacity: 0.7;">(No content)</div>` : '')}
                         ${email.disclaimer ? `<div class="disclaimer-text" style="font-size: 0.75rem; font-style: italic; opacity: 0.6; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid rgba(0,0,0,0.1);">${!email.body ? `<strong>BODY:</strong> <em style="opacity: 0.8;">[Message contained only legal disclaimer]</em><br><br>` : ''}<em>${escapeHtml(email.disclaimer.substring(0, 200))}${email.disclaimer.length > 200 ? '...' : ''}</em></div>` : ''}
                         ${email.duplicate_sources && email.duplicate_sources.length > 1 ? `
@@ -989,7 +1093,18 @@ function loadConversation(sender) {
     });
 
     document.getElementById('messages-container').innerHTML = html;
-    document.getElementById('messages-container').scrollTop = document.getElementById('messages-container').scrollHeight;
+
+    // If there's an active search, find matches and jump to first one
+    // Otherwise, scroll to bottom and hide search nav
+    if (currentSearchTerm) {
+        // Use setTimeout to ensure DOM is fully rendered before searching
+        setTimeout(() => findSearchMatches(), 50);
+    } else {
+        document.getElementById('messages-container').scrollTop = document.getElementById('messages-container').scrollHeight;
+        searchMatches = [];
+        currentMatchIndex = -1;
+        updateSearchNavUI();
+    }
 
     // Attach event listeners to editable recipients
     document.querySelectorAll('.editable-recipient').forEach(el => {
@@ -1038,6 +1153,8 @@ function groupByDate(emails) {
 // Build search index for faster lookups
 let searchIndex = null;
 let currentSearchTerm = '';  // Store current search term for highlighting
+let searchMatches = [];  // Array of message elements containing search matches
+let currentMatchIndex = -1;  // Current highlighted match (-1 = none)
 
 // Highlight search terms in text
 function highlightText(text, searchTerm) {
@@ -1052,6 +1169,86 @@ function highlightText(text, searchTerm) {
 
     // Wrap matches in <mark> tags
     return escapedText.replace(regex, '<mark style="background-color: #ffeb3b; padding: 2px 4px; border-radius: 2px; font-weight: 600;">$1</mark>');
+}
+
+// Find all messages containing search term matches
+function findSearchMatches() {
+    searchMatches = [];
+    currentMatchIndex = -1;
+
+    if (!currentSearchTerm) {
+        updateSearchNavUI();
+        return;
+    }
+
+    // Find all message bubbles that contain <mark> tags (highlighted matches)
+    const allBubbles = document.querySelectorAll('.message-bubble');
+    allBubbles.forEach(bubble => {
+        if (bubble.querySelector('mark')) {
+            searchMatches.push(bubble);
+        }
+    });
+
+    updateSearchNavUI();
+
+    // Jump to first match if any exist
+    if (searchMatches.length > 0) {
+        navigateToMatch(0);
+    }
+}
+
+// Navigate to a specific match by index
+function navigateToMatch(index) {
+    if (searchMatches.length === 0) return;
+
+    // Wrap around if out of bounds
+    if (index < 0) index = searchMatches.length - 1;
+    if (index >= searchMatches.length) index = 0;
+
+    // Remove highlight from previous match
+    if (currentMatchIndex >= 0 && searchMatches[currentMatchIndex]) {
+        searchMatches[currentMatchIndex].style.boxShadow = '';
+        searchMatches[currentMatchIndex].style.border = '';
+    }
+
+    currentMatchIndex = index;
+    const targetBubble = searchMatches[currentMatchIndex];
+
+    // Add prominent highlight to current match
+    targetBubble.style.boxShadow = '0 0 0 3px #ff5722, 0 4px 12px rgba(255, 87, 34, 0.4)';
+    targetBubble.style.border = '2px solid #ff5722';
+
+    // Scroll to the match with smooth behavior
+    targetBubble.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    updateSearchNavUI();
+}
+
+// Update search navigation UI
+function updateSearchNavUI() {
+    const navContainer = document.getElementById('search-nav-container');
+    if (!navContainer) return;
+
+    if (searchMatches.length === 0 || !currentSearchTerm) {
+        navContainer.style.display = 'none';
+        return;
+    }
+
+    navContainer.style.display = 'flex';
+    document.getElementById('search-match-counter').textContent =
+        `${currentMatchIndex + 1} / ${searchMatches.length}`;
+}
+
+// Navigate to next match
+function nextSearchMatch() {
+    if (searchMatches.length === 0) return;
+    navigateToMatch(currentMatchIndex + 1);
+}
+
+// Navigate to previous match
+function prevSearchMatch() {
+    if (searchMatches.length === 0) return;
+    navigateToMatch(currentMatchIndex - 1);
 }
 
 function buildSearchIndex() {
@@ -1186,7 +1383,18 @@ function escapeHtml(text) {
 function cleanSenderName(name) {
     if (!name) return name;
 
-    // Strip OCR garbage in brackets
+    // Remove [mailto: and [mailto patterns
+    name = name.replace(/\\s*\\[mailto:?[^\\]]*$/g, '');
+    name = name.replace(/\\s*\\[mailto:?[^\\]]*\\]/g, '');
+
+    // Remove malformed email addresses in brackets (with spaces)
+    // e.g., "[jeevacation@gma il.com"
+    name = name.replace(/\\[[\\w\\-\\.]+@[\\w\\s\\-\\.]+\\]?/g, '');
+
+    // Remove trailing OCR garbage like "[ ii", "[ il", "[ I", etc.
+    name = name.replace(/\\s*\\[\\s*[il1I]+\\s*$/g, '');
+
+    // Strip OCR garbage in brackets (original logic - kept for compatibility)
     const bracketMatch = name.match(/^(.+?)\\s*\\[([^\\]]+)\\]\\s*$/);
     if (bracketMatch) {
         const namePart = bracketMatch[1].trim();
@@ -1196,6 +1404,10 @@ function cleanSenderName(name) {
             name = namePart;
         }
     }
+
+    // Remove standalone brackets
+    name = name.replace(/\\s*\\[\\s*$/g, '');
+    name = name.replace(/^\\s*\\]/g, '');
 
     return name.trim();
 }
